@@ -1,0 +1,110 @@
+@startuml Activity - Fraud Evaluation Process
+!theme plain
+skinparam activityShape roundedBox
+
+title Fraud Engine - Rule Evaluation Activity Diagram
+
+start
+
+:Receive TransactionIngestEvent;
+
+:Load enabled fraud rules\nfrom database;
+
+:Load current transaction\nfrom database;
+
+:Initialize empty alerts list;
+
+partition "Rule 1: HIGH_AMOUNT" {
+    :Get HIGH_AMOUNT rule;
+
+    if (Rule enabled?) then (yes)
+        if (tx.amount > rule.threshold?) then (yes)
+            :Create FraudAlertEntity|
+            note right
+                severity: HIGH
+                description: "Transaction amount
+                {amount} exceeds limit {threshold}"
+            end note
+            :Add to alerts list;
+        else (no)
+        endif
+    else (no)
+    endif
+}
+
+if (Alerts list empty?) then (yes)
+    partition "Rule 2: VELOCITY" {
+        :Get VELOCITY rule;
+
+        if (Rule enabled?) then (yes)
+            :Query: Count transactions\nfor account_id in last 2 minutes;
+
+            if (txCount >= rule.threshold?) then (yes)
+                :Create FraudAlertEntity|
+                note right
+                    severity: MEDIUM
+                    description: "Account {id} has
+                    {count} transactions in 2 minutes"
+                end note
+                :Add to alerts list;
+            else (no)
+            endif
+        else (no)
+        endif
+    }
+else (no)
+endif
+
+if (Alerts list empty?) then (yes)
+    partition "Rule 3: GEO_JUMP" {
+        :Get GEO_JUMP rule;
+
+        if (Rule enabled?) then (yes)
+            :Query: Find previous transaction\nfor same account_id;
+
+            if (Previous tx exists?) then (yes)
+                :Normalize countries\n(uppercase);
+
+                if (Countries different?) then (yes)
+                    :Calculate time difference\n(current.createdAt - prev.createdAt);
+
+                    if (Time diff < rule.threshold\nAND time diff > 0?) then (yes)
+                        :Create FraudAlertEntity|
+                        note right
+                            severity: MEDIUM
+                            description: "Suspicious geo jump
+                            from {prev_country} to {curr_country}
+                            in {seconds} seconds"
+                        end note
+                        :Add to alerts list;
+                    else (no)
+                    endif
+                else (no)
+                endif
+            else (no)
+            endif
+        else (no)
+        endif
+    }
+else (no)
+endif
+
+:Increment alertsCreated\nPrometheus counter\n(for each alert);
+
+:Return EvaluationResult\nwith alerts list;
+
+stop
+
+legend right
+    |= Symbol |= Meaning |
+    | Diamond | Decision point |
+    | Rounded box | Action |
+    | Partition | Rule evaluation block |
+
+    **Note:** Rules are evaluated
+    with SHORT-CIRCUIT logic.
+    If any rule triggers, subsequent
+    rules are skipped.
+end legend
+
+@enduml

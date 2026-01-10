@@ -1,0 +1,151 @@
+@startuml Deployment Diagram
+!theme plain
+skinparam linetype ortho
+
+title Antifraud System - Deployment Architecture (Docker Compose)
+
+node "Docker Host" {
+
+    frame "Data Layer" {
+        node "postgres" <<PostgreSQL 16>> {
+            database "antifraud" as maindb {
+                [transactions]
+                [fraud_alerts]
+                [fraud_rules]
+                [cdm_*]
+            }
+            portin "5432" as pg_port
+        }
+
+        node "db-init" <<Init Container>> {
+            [Flyway Migration]
+        }
+
+        node "airflow-db" <<PostgreSQL>> {
+            database "airflow" as airflowdb
+        }
+
+        node "redis" <<Redis>> {
+            [Superset Cache]
+        }
+    }
+
+    frame "Message Broker" {
+        node "kafka-1" <<Kafka Broker>> {
+            [Broker 1\nKRaft Mode]
+            portin "9092" as k1_port
+        }
+
+        node "kafka-2" <<Kafka Broker>> {
+            [Broker 2\nKRaft Mode]
+            portin "9093" as k2_port
+        }
+
+        node "kafka-init" <<Init Container>> {
+            [Create Topics]
+        }
+    }
+
+    frame "Application Layer" {
+        node "antifraud-api" <<Spring Boot>> {
+            [REST Controllers]
+            [Kafka Consumer]
+            [Fraud Engine]
+            [JPA Repositories]
+            portin "8080" as api_port
+        }
+
+        node "tx-generator" <<Spring Boot>> {
+            [Kafka Producer]
+            [Transaction Generator]
+        }
+    }
+
+    frame "Orchestration" {
+        node "airflow" <<Apache Airflow>> {
+            [Scheduler]
+            [Webserver]
+            [etl_transactions_daily DAG]
+            [fraud_cdm_refresh DAG]
+            portin "8081" as airflow_port
+        }
+
+        node "airflow-init" <<Init Container>> {
+            [DB Init + Admin User]
+        }
+    }
+
+    frame "Monitoring & Analytics" {
+        node "prometheus" <<Prometheus>> {
+            [Metrics Scraper]
+            portin "9090" as prom_port
+        }
+
+        node "grafana" <<Grafana>> {
+            [Dashboards]
+            portin "3001" as graf_port
+        }
+
+        node "superset" <<Apache Superset>> {
+            [Analytics UI]
+            portin "8088" as super_port
+        }
+
+        node "kafka-ui" <<Kafka UI>> {
+            [Cluster Monitor]
+            portin "9091" as kafkaui_port
+        }
+    }
+}
+
+cloud "External Access" {
+    actor "User" as user
+    actor "Developer" as dev
+}
+
+' Database connections
+[Flyway Migration] --> pg_port : init schema
+[JPA Repositories] --> pg_port
+[fraud_cdm_refresh DAG] --> pg_port : psycopg2
+[Scheduler] --> airflowdb
+[Superset Cache] <-- [Analytics UI]
+[Analytics UI] --> pg_port : queries
+
+' Kafka connections
+[Broker 1\nKRaft Mode] <--> [Broker 2\nKRaft Mode] : replication
+[Kafka Producer] --> k1_port : produce
+[Kafka Producer] --> k2_port : produce
+[Kafka Consumer] --> k1_port : consume
+[Kafka Consumer] --> k2_port : consume
+[Create Topics] --> k1_port
+[Cluster Monitor] --> k1_port
+
+' API connections
+[etl_transactions_daily DAG] --> api_port : POST /airflow_transactions
+
+' Monitoring connections
+[Metrics Scraper] --> api_port : /actuator/prometheus
+[Dashboards] --> prom_port : query
+
+' External access
+user --> api_port : HTTP API
+user --> super_port : Analytics
+dev --> graf_port : Monitoring
+dev --> airflow_port : DAG Management
+dev --> kafkaui_port : Kafka Monitor
+
+note bottom of "kafka-1"
+    Cluster ID: OTMwNzFhYTY1ODNiNGE5OT
+    Topic: transactions
+    Partitions: 2
+    Replication: 2
+end note
+
+note bottom of "antifraud-api"
+    Metrics exposed:
+    - antifraud_transactions_saved_total
+    - antifraud_fraud_alerts_created_total
+    - antifraud_kafka_transactions_ingested_total
+end note
+
+@enduml

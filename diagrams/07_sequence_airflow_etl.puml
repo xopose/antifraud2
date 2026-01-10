@@ -1,0 +1,64 @@
+@startuml Sequence - Airflow ETL Flow
+!theme plain
+skinparam responseMessageBelowArrow true
+
+title Airflow DAG: etl_transactions_daily
+
+participant "Airflow Scheduler" as Scheduler
+participant "etl_transactions_daily\nDAG" as DAG
+participant "load_and_send_transactions\n(PythonOperator)" as Task
+database "/opt/airflow/data/\ntransactions_sample.csv" as CSV
+participant "antifraud-api\n:8080" as API
+database "PostgreSQL" as DB
+
+== DAG Trigger ==
+Scheduler -> DAG : trigger (manual)
+activate DAG
+DAG -> Task : execute
+activate Task
+
+== CSV Loading ==
+Task -> CSV : pandas.read_csv()
+CSV --> Task : DataFrame\n(~10,000-200,000 rows)
+
+Task -> Task : Extract columns:\n- transaction_id\n- account_id\n- amount\n- currency\n- merchant\n- country
+
+Task -> Task : Deduplicate by transaction_id
+Task -> Task : Clean numeric fields\n(to_numeric with errors='coerce')
+Task -> Task : Fill NaN with defaults
+
+== Batch Processing ==
+loop For each row in DataFrame
+    Task -> Task : Build payload:\n{transaction_id, account_id,\namount, currency, country, merchant}
+
+    Task -> API : POST /airflow_transactions\n(payload)
+    activate API
+
+    API -> DB : INSERT transaction\n(source="airflow")
+    API -> API : Evaluate fraud rules
+    API -> DB : INSERT alerts (if fraud)
+    API -> DB : UPDATE status (if fraud)
+
+    alt HTTP 200
+        API --> Task : TransactionResponse\n{result, rules_triggered}
+    else Error
+        API --> Task : Error response
+        Task -> Task : Log error,\ncontinue to next row
+    end
+    deactivate API
+end
+
+Task --> DAG : task_success
+deactivate Task
+DAG --> Scheduler : dag_success
+deactivate DAG
+
+note right of Task
+    Configuration:
+    - schedule: None (manual)
+    - start_date: 2024-01-01
+    - tags: ["antifraud"]
+    - One row at a time (no batching)
+end note
+
+@enduml

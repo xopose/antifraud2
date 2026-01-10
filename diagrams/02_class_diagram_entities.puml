@@ -1,0 +1,116 @@
+@startuml Class Diagram - Domain Entities
+!theme plain
+skinparam classAttributeIconSize 0
+
+title Antifraud System - Domain Entities (JPA)
+
+package "entity" {
+    class TransactionEntity <<Entity>> {
+        - id : Long <<PK, IDENTITY>>
+        - transactionId : String <<UNIQUE>>
+        - createdAt : Instant
+        - accountId : Long
+        - amount : BigDecimal(18,2)
+        - currency : String(8)
+        - merchant : String(128)
+        - country : String(8)
+        - status : String(16) = "APPROVED"
+        - payload : TransactionIngestEvent <<JSONB>>
+        - ingestedAt : Instant
+        - source : String(16)
+        --
+        + {static} of(event, payload, source) : TransactionEntity
+        # prePersist() : void
+    }
+
+    class FraudAlertEntity <<Entity>> {
+        - id : Long <<PK, IDENTITY>>
+        - transactionId : String(64)
+        - accountId : Long
+        - ruleCode : String(64)
+        - severity : String(16)
+        - description : String
+        - createdAt : Instant
+        - resolved : short = 0
+        --
+        + {static} of(txId, accountId, rule, severity, desc) : FraudAlertEntity
+    }
+
+    class FraudRuleEntity <<Entity>> {
+        - id : Integer <<PK, IDENTITY>>
+        - code : String(64) <<UNIQUE>>
+        - title : String(128)
+        - description : String
+        - threshold : Double
+        - enabled : short = 1
+        - severity : String(16)
+        - createdAt : Instant
+        --
+        + setThreshold(Double) : void
+        + setEnabled(boolean) : void
+        + setSeverity(String) : void
+    }
+}
+
+package "dto" {
+    class TransactionRequest <<Record>> {
+        + transaction_id : String <<NotBlank>>
+        + account_id : Long <<NotNull>>
+        + amount : BigDecimal <<NotNull>>
+        + currency : String <<NotBlank>>
+        + country : String <<NotBlank>>
+        + merchant : String <<NotBlank>>
+    }
+
+    class TransactionIngestEvent <<Record>> {
+        + transaction_id : String
+        + account_id : Long
+        + amount : BigDecimal
+        + currency : String
+        + country : String
+        + merchant : String
+        + source : String
+        --
+        + {static} random() : TransactionIngestEvent
+    }
+
+    class TransactionResponse <<Record>> {
+        + result : String
+        + rules_triggered : List<String>
+    }
+
+    class EvaluationResult <<Record>> {
+        + alerts : List<FraudAlertEntity>
+    }
+}
+
+' Relationships
+TransactionEntity "1" *-- "0..1" TransactionIngestEvent : payload
+TransactionEntity "1" <-- "*" FraudAlertEntity : transactionId
+FraudAlertEntity "*" --> "1" FraudRuleEntity : ruleCode
+
+TransactionRequest ..> TransactionIngestEvent : converts to
+
+note right of TransactionEntity
+  Table: transactions
+  Indexes:
+  - idx_transactions_account_created
+    (account_id, created_at DESC)
+end note
+
+note right of FraudAlertEntity
+  Table: fraud_alerts
+  Indexes:
+  - idx_alerts_created (created_at DESC)
+  - idx_alerts_rule (rule_code)
+end note
+
+note right of FraudRuleEntity
+  Table: fraud_rules
+  Default rules:
+  - HIGH_AMOUNT (threshold=10000, HIGH)
+  - VELOCITY (threshold=5, MEDIUM)
+  - GEO_JUMP (threshold=60, MEDIUM)
+end note
+
+@enduml

@@ -1,0 +1,140 @@
+@startuml Class Diagram - Services & Repositories
+!theme plain
+skinparam classAttributeIconSize 0
+
+title Antifraud System - Service Layer Architecture
+
+package "controller" {
+    class TransactionController <<RestController>> {
+        - service : TransactionService
+        --
+        + addAndCheck(request) : TransactionResponse
+        + airflowLoad(request) : TransactionResponse
+        + search(id, accountId, status, from, to) : List<Map>
+    }
+
+    class RuleController <<RestController>> {
+        - service : RuleService
+        --
+        + all() : List<Map>
+        + update(code, body) : Map
+    }
+}
+
+package "service" {
+    class TransactionService <<Service>> {
+        - txRepo : TransactionRepository
+        - alertRepo : FraudAlertRepository
+        - engine : FraudEngine
+        - saver : TransactionSaver
+        - statusUpdater : TransactionStatusUpdater
+        - txSaved : Counter
+        --
+        + ingest(tx, payload) : TransactionResponse
+        + search(txId, accountId, status, from, to) : List<TransactionEntity>
+    }
+
+    class FraudEngine <<Component>> {
+        - txRepo : TransactionRepository
+        - ruleRepo : FraudRuleRepository
+        - alertsCreated : Counter
+        --
+        + evaluate(tx) : EvaluationResult
+        - checkHighAmount(tx, rules, alerts) : void
+        - checkVelocity(tx, rules, alerts) : void
+        - checkGeoJump(tx, rules, alerts) : void
+    }
+
+    class RuleService <<Service>> {
+        - repo : FraudRuleRepository
+        --
+        + all() : List<FraudRuleEntity>
+        + update(code, threshold, enabled, severity) : FraudRuleEntity
+    }
+
+    class TransactionSaver <<Component>> {
+        --
+        + saveTransaction(repo, counter, event) : void
+        <<Transactional REQUIRES_NEW>>
+    }
+
+    class TransactionStatusUpdater <<Component>> {
+        - txRepo : TransactionRepository
+        --
+        + decline(transactionId) : void
+        <<Transactional REQUIRES_NEW>>
+    }
+}
+
+package "kafka" {
+    class TransactionConsumer <<Component>> {
+        - service : TransactionService
+        - ingested : Counter
+        --
+        + onMessage(event) : void
+        <<KafkaListener topic=transactions>>
+    }
+}
+
+package "repo" {
+    interface TransactionRepository <<JpaRepository>> {
+        + findByTransactionId(txId) : Optional<TransactionEntity>
+        + findTop200ByAccountIdOrderByCreatedAtDesc(accountId) : List
+        + findTopByAccountIdAndTransactionIdNotOrderByCreatedAtDesc(accountId, txId) : Optional
+        + updateStatusByTransactionId(txId, status) : void
+        + countByAccountSince(accountId, fromTs) : long
+        + lastByAccount(accountId) : List<TransactionEntity>
+    }
+
+    interface FraudAlertRepository <<JpaRepository>> {
+        ' Basic CRUD operations
+    }
+
+    interface FraudRuleRepository <<JpaRepository>> {
+        + findByCode(code) : Optional<FraudRuleEntity>
+    }
+}
+
+' Controller dependencies
+TransactionController --> TransactionService
+RuleController --> RuleService
+
+' Service dependencies
+TransactionService --> TransactionRepository
+TransactionService --> FraudAlertRepository
+TransactionService --> FraudEngine
+TransactionService --> TransactionSaver
+TransactionService --> TransactionStatusUpdater
+
+FraudEngine --> TransactionRepository
+FraudEngine --> FraudRuleRepository
+
+RuleService --> FraudRuleRepository
+
+TransactionSaver --> TransactionRepository
+TransactionStatusUpdater --> TransactionRepository
+
+' Kafka
+TransactionConsumer --> TransactionService
+
+note right of TransactionSaver
+  Separate @Transactional
+  to isolate save from
+  fraud evaluation
+end note
+
+note right of TransactionStatusUpdater
+  Separate @Transactional
+  to update status after
+  fraud detection
+end note
+
+note bottom of FraudEngine
+  Fraud Rules Evaluation Order:
+  1. HIGH_AMOUNT - amount > threshold
+  2. VELOCITY - tx count in 2 min >= limit
+  3. GEO_JUMP - country change < threshold sec
+  (Short-circuit on first match)
+end note
+
+@enduml

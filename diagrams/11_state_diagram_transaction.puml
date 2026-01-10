@@ -1,0 +1,88 @@
+@startuml State Diagram - Transaction Lifecycle
+!theme plain
+
+title Transaction State Machine
+
+[*] --> Received : HTTP/Kafka/Airflow
+
+state "Received" as Received {
+    [*] --> Validating
+    Validating : Validate request fields
+    Validating --> Valid : All fields present
+    Validating --> Invalid : Missing required fields
+}
+
+Invalid --> [*] : Return validation error
+
+state "Processing" as Processing {
+    [*] --> CheckingDuplicate
+
+    CheckingDuplicate : Query by transaction_id
+    CheckingDuplicate --> Duplicate : Already exists
+    CheckingDuplicate --> Persisting : New transaction
+
+    Persisting : INSERT INTO transactions
+    Persisting : status = 'APPROVED'
+    Persisting : source = http|kafka|airflow
+    Persisting --> Persisted : Success
+
+    Persisted --> Evaluating
+}
+
+Duplicate --> [*] : Return DUPLICATE
+
+state "Evaluating" as Evaluating {
+    [*] --> LoadRules
+
+    LoadRules : SELECT enabled rules
+    LoadRules --> CheckHighAmount
+
+    state "Fraud Rules" as FraudRules {
+        CheckHighAmount : amount > threshold?
+        CheckHighAmount --> AlertCreated : YES (HIGH)
+        CheckHighAmount --> CheckVelocity : NO
+
+        CheckVelocity : tx count in 2min >= limit?
+        CheckVelocity --> AlertCreated : YES (MEDIUM)
+        CheckVelocity --> CheckGeoJump : NO
+
+        CheckGeoJump : country changed < N sec?
+        CheckGeoJump --> AlertCreated : YES (MEDIUM)
+        CheckGeoJump --> NoFraud : NO
+    }
+
+    AlertCreated --> SavingAlerts
+    SavingAlerts : INSERT INTO fraud_alerts
+    SavingAlerts --> UpdatingStatus
+    UpdatingStatus : UPDATE status = 'DECLINED'
+    UpdatingStatus --> Declined
+
+    NoFraud --> Approved
+}
+
+state "APPROVED" as Approved <<final>>
+state "DECLINED" as Declined <<final>>
+
+Approved --> [*] : Return OK
+Declined --> [*] : Return FRAUD\n+ triggered rules
+
+note right of Evaluating
+    Rules are evaluated with
+    **short-circuit** logic:
+    first match stops evaluation
+end note
+
+note right of Persisting
+    Uses separate @Transactional
+    (REQUIRES_NEW) to isolate
+    from evaluation phase
+end note
+
+note right of UpdatingStatus
+    Uses separate @Transactional
+    (REQUIRES_NEW) to ensure
+    status update even if
+    main transaction fails
+end note
+
+@enduml

@@ -1,0 +1,70 @@
+@startuml Sequence - Kafka Transaction Flow
+!theme plain
+skinparam responseMessageBelowArrow true
+
+title Kafka Transaction Stream Processing
+
+participant "tx-generator" as Gen
+participant "KafkaProducerService" as Producer
+queue "Kafka Cluster\n(transactions topic)" as Kafka
+participant "TransactionConsumer\n@KafkaListener" as Consumer
+participant "TransactionService" as Svc
+database "PostgreSQL" as DB
+
+== Transaction Generation ==
+loop Every (1000/RATE_PER_SEC) ms
+    Gen -> Gen : TransactionIngestEvent.random()
+    note right
+        Random generation:
+        - transaction_id: UUID
+        - account_id: 1-100
+        - amount: 10-25010
+        - currency: [RUB, USD, EUR]
+        - country: [RU, US, DE, NL, TR, AE, GB, CA]
+        - merchant: [AMAZON, STEAM, ...]
+        - source: "kafka"
+    end note
+
+    Gen -> Producer : send(event)
+    activate Producer
+    Producer -> Producer : Serialize to JSON
+    Producer -> Kafka : ProducerRecord\n(key=transaction_id,\nvalue=event_json)
+    note right
+        Producer config:
+        - acks=all
+        - idempotence=true
+        - retries=10
+        - linger.ms=10
+    end note
+    Kafka --> Producer : RecordMetadata
+    deactivate Producer
+end
+
+== Transaction Consumption ==
+Kafka -> Consumer : poll()
+activate Consumer
+note right
+    Consumer config:
+    - group.id=antifraud-api
+    - auto.offset.reset=earliest
+    - topic=transactions
+end note
+
+Consumer -> Consumer : Deserialize JSON\nto TransactionIngestEvent
+Consumer -> Consumer : Increment\ningested counter
+
+Consumer -> Svc : ingest(event, event)
+activate Svc
+
+Svc -> DB : Save transaction\n(source="kafka")
+Svc -> Svc : Evaluate fraud rules
+Svc -> DB : Save alerts (if any)
+Svc -> DB : Update status (if fraud)
+
+Svc --> Consumer : TransactionResponse
+deactivate Svc
+
+Consumer --> Kafka : commit offset
+deactivate Consumer
+
+@enduml

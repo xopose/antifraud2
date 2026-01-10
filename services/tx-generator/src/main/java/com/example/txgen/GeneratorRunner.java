@@ -6,7 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
-
+//Запускает генератор с указанными параметрами в application.yml
 @Component
 public class GeneratorRunner implements CommandLineRunner {
 

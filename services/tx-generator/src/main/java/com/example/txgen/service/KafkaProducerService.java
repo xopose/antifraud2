@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.Properties;
 
+//Продюсер для кафки
 @Service
 public class KafkaProducerService implements DisposableBean {
 

@@ -3,7 +3,7 @@ from airflow.operators.python import PythonOperator
 from datetime import datetime
 import psycopg2
 
-
+#Даг для обновления витрины
 def refresh_cdm():
     conn = psycopg2.connect(
         host="antifraud-postgres",

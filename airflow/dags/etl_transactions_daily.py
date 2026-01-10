@@ -9,7 +9,7 @@ from airflow.operators.python import PythonOperator
 DATA_PATH = "/opt/airflow/data/transactions_sample.csv"
 SPRING_URL = "http://antifraud-api:8080/airflow_transactions"
 
-
+#Даг для подтягивания данных из csv
 def load_and_send_transactions():
     df = pd.read_csv(DATA_PATH)
 

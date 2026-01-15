@@ -1,0 +1,85 @@
+@startuml Sequence - CDM Refresh DAG
+!theme plain
+skinparam responseMessageBelowArrow true
+
+title Airflow DAG: fraud_cdm_refresh (Every Minute)
+
+participant "Airflow Scheduler" as Scheduler
+participant "fraud_cdm_refresh\nDAG" as DAG
+participant "refresh_cdm\n(PythonOperator)" as Task
+database "PostgreSQL\n(psycopg2)" as DB
+
+== DAG Execution (Every Minute) ==
+Scheduler -> DAG : trigger (cron: * * * * *)
+activate DAG
+DAG -> Task : execute
+activate Task
+
+Task -> DB : Connect\n(host=antifraud-postgres,\ndb=antifraud)
+activate DB
+
+== Create CDM Tables (Idempotent) ==
+Task -> DB : CREATE TABLE IF NOT EXISTS\ncdm_tx_per_minute(...)
+Task -> DB : CREATE TABLE IF NOT EXISTS\ncdm_fraud_total(...)
+Task -> DB : CREATE TABLE IF NOT EXISTS\ncdm_fraud_top_merchants(...)
+Task -> DB : CREATE TABLE IF NOT EXISTS\ncdm_fraud_top_accounts(...)
+Task -> DB : CREATE TABLE IF NOT EXISTS\ncdm_fraud_rules_share(...)
+Task -> DB : CREATE TABLE IF NOT EXISTS\ncdm_fraud_by_country(...)
+Task -> DB : CREATE TABLE IF NOT EXISTS\ncdm_blocked_tx_per_minute(...)
+Task -> DB : CREATE TABLE IF NOT EXISTS\ncdm_saved_money(...)
+
+== Refresh Aggregations ==
+group cdm_tx_per_minute
+    Task -> DB : INSERT INTO cdm_tx_per_minute\nSELECT date_trunc('minute', created_at),\nCOUNT(*) FROM transactions\nGROUP BY 1\nON CONFLICT (minute_ts) DO UPDATE
+end
+
+group cdm_fraud_total
+    Task -> DB : INSERT INTO cdm_fraud_total\n(id, total_alerts, updated_at)\nVALUES (1, (SELECT COUNT(*)\nFROM fraud_alerts), now())\nON CONFLICT (id) DO UPDATE
+end
+
+group cdm_fraud_top_merchants
+    Task -> DB : TRUNCATE cdm_fraud_top_merchants
+    Task -> DB : INSERT INTO cdm_fraud_top_merchants\nSELECT t.merchant, COUNT(*)\nFROM fraud_alerts a\nJOIN transactions t\nGROUP BY merchant\nORDER BY COUNT DESC\nLIMIT 10
+end
+
+group cdm_fraud_top_accounts
+    Task -> DB : TRUNCATE cdm_fraud_top_accounts
+    Task -> DB : INSERT INTO cdm_fraud_top_accounts\nSELECT account_id, COUNT(*)\nFROM fraud_alerts\nGROUP BY account_id\nORDER BY COUNT DESC\nLIMIT 10
+end
+
+group cdm_fraud_rules_share
+    Task -> DB : TRUNCATE cdm_fraud_rules_share
+    Task -> DB : INSERT INTO cdm_fraud_rules_share\nSELECT rule_code, COUNT(*),\nROUND(100.0 * COUNT(*) /\nNULLIF(total, 0), 2)\nFROM fraud_alerts\nCROSS JOIN (SELECT COUNT(*)\nFROM fraud_alerts) AS total
+end
+
+group cdm_fraud_by_country
+    Task -> DB : TRUNCATE cdm_fraud_by_country
+    Task -> DB : INSERT INTO cdm_fraud_by_country\nSELECT t.country, COUNT(*)\nFROM fraud_alerts a\nJOIN transactions t\nGROUP BY country
+end
+
+group cdm_blocked_tx_per_minute
+    Task -> DB : INSERT INTO cdm_blocked_tx_per_minute\nSELECT date_trunc('minute', created_at),\nCOUNT(*) FROM transactions\nWHERE status = 'DECLINED'\nGROUP BY 1\nON CONFLICT DO UPDATE
+end
+
+group cdm_saved_money
+    Task -> DB : INSERT INTO cdm_saved_money\n(id, total_saved, updated_at)\nVALUES (1, (SELECT COALESCE(\nSUM(amount), 0) FROM transactions\nWHERE status = 'DECLINED'), now())\nON CONFLICT (id) DO UPDATE
+end
+
+Task -> DB : COMMIT
+DB --> Task : success
+deactivate DB
+
+Task --> DAG : task_success
+deactivate Task
+DAG --> Scheduler : dag_success
+deactivate DAG
+
+note right of DAG
+    Configuration:
+    - schedule: "* * * * *" (every minute)
+    - max_active_runs: 1
+    - start_date: 2026-01-01
+    - tags: ["fraud", "cdm"]
+end note
+
+@enduml

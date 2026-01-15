@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/services/antifraud-api/antifraud-api.iml" filepath="$PROJECT_DIR$/services/antifraud-api/antifraud-api.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/antifraud-spring.iml" filepath="$PROJECT_DIR$/.idea/antifraud-spring.iml" />
+      <module fileurl="file://$PROJECT_DIR$/services/tx-generator/tx-generator.iml" filepath="$PROJECT_DIR$/services/tx-generator/tx-generator.iml" />
+    </modules>
+  </component>
+</project>

@@ -1,0 +1,125 @@
+@startuml Component Diagram - Antifraud System
+!theme plain
+skinparam componentStyle rectangle
+skinparam linetype ortho
+
+title Antifraud System - Component Diagram
+
+package "Data Sources" {
+    [HTTP Client] as HTTP
+    [Kafka Producer\n(tx-generator)] as TXGen
+    [CSV Files] as CSV
+}
+
+package "Message Broker" <<Cloud>> {
+    queue "Kafka Cluster\n(2 brokers)" as Kafka {
+        queue "transactions\n(2 partitions)" as Topic
+    }
+}
+
+package "Antifraud API (Spring Boot)" {
+    [TransactionController] as TxCtrl
+    [RuleController] as RuleCtrl
+    [TransactionConsumer\n(KafkaListener)] as Consumer
+
+    package "Service Layer" {
+        [TransactionService] as TxSvc
+        [FraudEngine] as Engine
+        [RuleService] as RuleSvc
+        [TransactionSaver] as Saver
+        [TransactionStatusUpdater] as Updater
+    }
+
+    package "Repository Layer" {
+        [TransactionRepository] as TxRepo
+        [FraudAlertRepository] as AlertRepo
+        [FraudRuleRepository] as RuleRepo
+    }
+}
+
+package "Orchestration" {
+    [Airflow\nScheduler] as Airflow
+    [etl_transactions_daily] as DAG1
+    [fraud_cdm_refresh] as DAG2
+}
+
+database "PostgreSQL" {
+    frame "Core Tables" {
+        [transactions] as TxTable
+        [fraud_alerts] as AlertTable
+        [fraud_rules] as RuleTable
+    }
+
+    frame "CDM Tables\n(Analytics)" {
+        [cdm_tx_per_minute] as CDM1
+        [cdm_fraud_total] as CDM2
+        [cdm_fraud_top_merchants] as CDM3
+        [cdm_fraud_top_accounts] as CDM4
+        [cdm_fraud_rules_share] as CDM5
+        [cdm_fraud_by_country] as CDM6
+        [cdm_blocked_tx_per_minute] as CDM7
+        [cdm_saved_money] as CDM8
+    }
+}
+
+package "Monitoring & Analytics" {
+    [Prometheus] as Prom
+    [Grafana] as Graf
+    [Apache Superset] as Superset
+    [Kafka UI] as KafkaUI
+}
+
+' Data flow from sources
+HTTP --> TxCtrl : POST /transactions
+TXGen --> Topic : produce
+CSV --> DAG1 : read
+
+' Kafka flow
+Topic --> Consumer : consume
+
+' Airflow flows
+Airflow --> DAG1
+Airflow --> DAG2
+DAG1 --> TxCtrl : POST /airflow_transactions
+DAG2 --> CDM1 : refresh
+DAG2 --> CDM2 : refresh
+DAG2 --> CDM3 : refresh
+DAG2 --> CDM4 : refresh
+DAG2 --> CDM5 : refresh
+DAG2 --> CDM6 : refresh
+DAG2 --> CDM7 : refresh
+DAG2 --> CDM8 : refresh
+
+' Controller to Service
+TxCtrl --> TxSvc
+RuleCtrl --> RuleSvc
+Consumer --> TxSvc
+
+' Service layer
+TxSvc --> Saver
+TxSvc --> Engine
+TxSvc --> Updater
+RuleSvc --> RuleRepo
+
+' Engine dependencies
+Engine --> RuleRepo
+Engine --> TxRepo
+
+' Repository to DB
+Saver --> TxRepo
+TxRepo --> TxTable
+AlertRepo --> AlertTable
+RuleRepo --> RuleTable
+Updater --> TxRepo
+TxSvc --> AlertRepo
+
+' Monitoring
+TxSvc ..> Prom : metrics
+Consumer ..> Prom : metrics
+Prom --> Graf : scrape
+Superset --> TxTable : query
+Superset --> AlertTable : query
+Superset --> CDM1 : query
+KafkaUI --> Kafka : monitor
+
+@enduml

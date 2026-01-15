@@ -1,0 +1,141 @@
+@startuml ERD - Database Schema
+!theme plain
+skinparam linetype ortho
+
+title Antifraud System - Entity Relationship Diagram
+
+' Core Tables (Created by Flyway V1__init.sql)
+entity "transactions" as tx {
+    * **id** : BIGSERIAL <<PK>>
+    --
+    * transaction_id : VARCHAR(64) <<UNIQUE>>
+    * created_at : TIMESTAMPTZ
+    * account_id : BIGINT
+    * amount : NUMERIC(18,2)
+    * currency : VARCHAR(8)
+    * merchant : VARCHAR(128)
+    * country : VARCHAR(8)
+    status : VARCHAR(16) = 'APPROVED'
+    payload : JSONB
+    * ingested_at : TIMESTAMPTZ
+    * source : VARCHAR(16)
+    --
+    <<INDEX>> idx_transactions_account_created
+    (account_id, created_at DESC)
+}
+
+entity "fraud_alerts" as alerts {
+    * **id** : BIGSERIAL <<PK>>
+    --
+    * transaction_id : VARCHAR(64) <<FK>>
+    * account_id : BIGINT
+    * rule_code : VARCHAR(64) <<FK>>
+    * severity : VARCHAR(16)
+    * description : TEXT
+    * created_at : TIMESTAMPTZ
+    resolved : SMALLINT = 0
+    --
+    <<INDEX>> idx_alerts_created (created_at DESC)
+    <<INDEX>> idx_alerts_rule (rule_code)
+}
+
+entity "fraud_rules" as rules {
+    * **id** : SERIAL <<PK>>
+    --
+    * code : VARCHAR(64) <<UNIQUE>>
+    * title : VARCHAR(128)
+    * description : TEXT
+    threshold : DOUBLE PRECISION
+    enabled : SMALLINT = 1
+    * severity : VARCHAR(16)
+    created_at : TIMESTAMPTZ = now()
+}
+
+' CDM Tables (Created by Airflow DAG fraud_cdm_refresh)
+package "CDM Tables (Airflow)" <<Rectangle>> {
+    entity "cdm_tx_per_minute" as cdm1 {
+        * **minute_ts** : TIMESTAMPTZ <<PK>>
+        --
+        * tx_count : BIGINT
+    }
+
+    entity "cdm_fraud_total" as cdm2 {
+        * **id** : SMALLINT <<PK>> = 1
+        --
+        * total_alerts : BIGINT
+        * updated_at : TIMESTAMPTZ
+    }
+
+    entity "cdm_fraud_top_merchants" as cdm3 {
+        * **merchant** : VARCHAR(128) <<PK>>
+        --
+        * alerts_count : BIGINT
+        * updated_at : TIMESTAMPTZ
+    }
+
+    entity "cdm_fraud_top_accounts" as cdm4 {
+        * **account_id** : BIGINT <<PK>>
+        --
+        * alerts_count : BIGINT
+        * updated_at : TIMESTAMPTZ
+    }
+
+    entity "cdm_fraud_rules_share" as cdm5 {
+        * **rule_code** : VARCHAR(64) <<PK>>
+        --
+        * alerts_count : BIGINT
+        * percentage : NUMERIC(5,2)
+        * updated_at : TIMESTAMPTZ
+    }
+
+    entity "cdm_fraud_by_country" as cdm6 {
+        * **country** : VARCHAR(8) <<PK>>
+        --
+        * alerts_count : BIGINT
+        * updated_at : TIMESTAMPTZ
+    }
+
+    entity "cdm_blocked_tx_per_minute" as cdm7 {
+        * **minute_ts** : TIMESTAMPTZ <<PK>>
+        --
+        * blocked_count : BIGINT
+    }
+
+    entity "cdm_saved_money" as cdm8 {
+        * **id** : SMALLINT <<PK>> = 1
+        --
+        * total_saved : NUMERIC(18,2)
+        * updated_at : TIMESTAMPTZ
+    }
+}
+
+' Relationships
+tx ||--o{ alerts : "transaction_id"
+rules ||--o{ alerts : "rule_code"
+
+' CDM dependencies (aggregation sources)
+tx ..> cdm1 : "aggregates"
+tx ..> cdm7 : "aggregates\n(DECLINED)"
+tx ..> cdm8 : "aggregates\n(DECLINED amount)"
+alerts ..> cdm2 : "counts"
+alerts ..> cdm3 : "groups by merchant"
+alerts ..> cdm4 : "groups by account"
+alerts ..> cdm5 : "groups by rule"
+alerts ..> cdm6 : "groups by country"
+
+note right of rules
+  **Default Data (V1__init.sql):**
+  | code | threshold | severity |
+  |------|-----------|----------|
+  | HIGH_AMOUNT | 10000 | HIGH |
+  | VELOCITY | 5 | MEDIUM |
+  | GEO_JUMP | 60 | MEDIUM |
+end note
+
+note bottom of cdm1
+  CDM tables refreshed
+  every minute by
+  **fraud_cdm_refresh** DAG
+end note
+
+@enduml

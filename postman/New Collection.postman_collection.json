@@ -1,0 +1,52 @@
+{
+	"info": {
+		"_postman_id": "2d4ed9e7-52c4-4f9e-962c-3a7a422df55a",
+		"name": "New Collection",
+		"schema": "https://schema.getpostman.com/json/collection/v2.0.0/collection.json",
+		"_exporter_id": "28970112"
+	},
+	"item": [
+		{
+			"name": "New Request",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n    \"transaction_id\":\"150045\",\r\n    \"account_id\":1006,\r\n    \"amount\":9500,\r\n    \"currency\":\"RUB\",\r\n    \"country\":\"RU\",\r\n    \"merchant\":\"MEGAMARKET\"\r\n  }",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": "localhost:8080/transactions"
+			},
+			"response": []
+		},
+		{
+			"name": "New Request",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "localhost:8080/transactions?account_id=1006",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"transactions"
+					],
+					"query": [
+						{
+							"key": "account_id",
+							"value": "1006"
+						}
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}

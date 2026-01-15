@@ -1,0 +1,104 @@
+@startuml Sequence - HTTP Transaction Flow
+!theme plain
+skinparam responseMessageBelowArrow true
+
+title HTTP Transaction Processing Flow
+
+actor "HTTP Client" as Client
+participant "TransactionController" as Ctrl
+participant "TransactionService" as Svc
+participant "TransactionSaver" as Saver
+database "transactions" as TxDB
+participant "FraudEngine" as Engine
+database "fraud_rules" as RulesDB
+participant "FraudAlertRepository" as AlertRepo
+database "fraud_alerts" as AlertDB
+participant "TransactionStatusUpdater" as Updater
+
+Client -> Ctrl : POST /transactions\n{transaction_id, account_id,\namount, currency, country, merchant}
+
+activate Ctrl
+Ctrl -> Ctrl : Convert to TransactionIngestEvent\n(source = "http")
+Ctrl -> Svc : ingest(event, payload)
+activate Svc
+
+== Transaction Persistence (REQUIRES_NEW) ==
+Svc -> Saver : saveTransaction(repo, counter, event)
+activate Saver
+Saver -> TxDB : INSERT INTO transactions
+alt Duplicate transaction_id
+    TxDB --> Saver : DataIntegrityViolationException
+    Saver --> Svc : exception
+    Svc --> Ctrl : TransactionResponse\n(result=DUPLICATE, rules=[])
+    Ctrl --> Client : 200 OK {result: "DUPLICATE"}
+else Success
+    TxDB --> Saver : saved
+    Saver -> Saver : increment txSaved counter
+    Saver --> Svc : success
+    deactivate Saver
+end
+
+== Fraud Evaluation ==
+Svc -> Engine : evaluate(event)
+activate Engine
+
+Engine -> RulesDB : SELECT * FROM fraud_rules\nWHERE enabled = 1
+RulesDB --> Engine : [HIGH_AMOUNT, VELOCITY, GEO_JUMP]
+
+Engine -> TxDB : findByTransactionId(tx_id)
+TxDB --> Engine : currentTx
+
+group Rule 1: HIGH_AMOUNT
+    Engine -> Engine : Check amount > threshold (10000)
+    alt Amount exceeds threshold
+        Engine -> Engine : Create FraudAlertEntity\n(rule=HIGH_AMOUNT, severity=HIGH)
+    end
+end
+
+group Rule 2: VELOCITY (if no alerts yet)
+    Engine -> TxDB : countByAccountSince\n(accountId, now - 2min)
+    TxDB --> Engine : txCount
+    alt txCount >= threshold (5)
+        Engine -> Engine : Create FraudAlertEntity\n(rule=VELOCITY, severity=MEDIUM)
+    end
+end
+
+group Rule 3: GEO_JUMP (if no alerts yet)
+    Engine -> TxDB : findTopByAccountId...\n(accountId, excludeTxId)
+    TxDB --> Engine : previousTx (optional)
+    alt Previous tx exists
+        Engine -> Engine : Compare countries
+        alt Different country AND\ntime gap < threshold (60s)
+            Engine -> Engine : Create FraudAlertEntity\n(rule=GEO_JUMP, severity=MEDIUM)
+        end
+    end
+end
+
+Engine -> Engine : increment alertsCreated counter\n(for each alert)
+Engine --> Svc : EvaluationResult(alerts)
+deactivate Engine
+
+== Alert Persistence & Status Update ==
+alt Alerts detected (FRAUD)
+    Svc -> AlertRepo : saveAll(alerts)
+    AlertRepo -> AlertDB : INSERT INTO fraud_alerts
+    AlertDB --> AlertRepo : saved
+
+    Svc -> Updater : decline(transactionId)
+    activate Updater
+    note right: REQUIRES_NEW transaction
+    Updater -> TxDB : UPDATE transactions\nSET status = 'DECLINED'\nWHERE transaction_id = ?
+    TxDB --> Updater : updated
+    Updater --> Svc : done
+    deactivate Updater
+
+    Svc --> Ctrl : TransactionResponse\n(result=FRAUD, rules=[triggered_rules])
+    Ctrl --> Client : 200 OK\n{result: "FRAUD",\nrules_triggered: ["HIGH_AMOUNT"]}
+else No alerts (OK)
+    Svc --> Ctrl : TransactionResponse\n(result=OK, rules=[])
+    deactivate Svc
+    Ctrl --> Client : 200 OK\n{result: "OK", rules_triggered: []}
+    deactivate Ctrl
+end
+
+@enduml

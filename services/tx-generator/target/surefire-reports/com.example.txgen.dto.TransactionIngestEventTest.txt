@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.example.txgen.dto.TransactionIngestEventTest
+-------------------------------------------------------------------------------
+Tests run: 11, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.081 s -- in com.example.txgen.dto.TransactionIngestEventTest
